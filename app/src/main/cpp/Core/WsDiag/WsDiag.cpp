@@ -6,7 +6,12 @@
 #include <cstdarg>
 #include <cstdio>
 #include <ctime>
+#include <fcntl.h>
 #include <mutex>
+#include <signal.h>
+#include <thread>
+#include <ucontext.h>
+#include <unistd.h>
 
 #include "../../include/misc/Logger.h"
 
@@ -38,11 +43,13 @@ UpdateFn g_updateOrig = nullptr;
 StepFn g_stepOrig = nullptr;
 std::atomic<std::uint32_t> g_updateCalls{0};
 std::atomic<std::uint32_t> g_stepCalls{0};
+std::atomic<std::uint32_t> g_lastState{0xffffffffu};
+std::atomic<std::uint32_t> g_lastGate{0xffffffffu};
 std::atomic<bool> g_installed{false};
+std::uintptr_t g_libBase = 0;
 
 std::mutex g_logMutex;
 int g_logFd = -1;
-std::FILE *g_logFile = nullptr;
 
 void WriteLine(const char *format, ...) {
     char body[512];
@@ -67,10 +74,56 @@ void WriteLine(const char *format, ...) {
     if (g_logFd >= 0) {
         dprintf(g_logFd, "%s\n", line);
     }
-    if (g_logFile != nullptr) {
-        std::fprintf(g_logFile, "%s\n", line);
-        std::fflush(g_logFile);
+}
+
+void CrashHandler(int sig, siginfo_t *info, void *context) {
+    auto *uc = static_cast<ucontext_t *>(context);
+    const std::uintptr_t pc = uc != nullptr ? uc->uc_mcontext.pc : 0;
+    const std::uintptr_t lr = uc != nullptr ? uc->uc_mcontext.regs[30] : 0;
+    const std::uintptr_t sp = uc != nullptr ? uc->uc_mcontext.sp : 0;
+    const std::uintptr_t fp = uc != nullptr ? uc->uc_mcontext.regs[29] : 0;
+
+    char buf[384];
+    const int n = std::snprintf(
+            buf, sizeof(buf),
+            "WS CRASH sig=%d addr=%p pc=%p lr=%p sp=%p fp=%p rva=0x%lx "
+            "update=%u step=%u state=%u gate=%u\n",
+            sig, info != nullptr ? info->si_addr : nullptr,
+            reinterpret_cast<void *>(pc), reinterpret_cast<void *>(lr),
+            reinterpret_cast<void *>(sp), reinterpret_cast<void *>(fp),
+            static_cast<unsigned long>(pc - g_libBase),
+            g_updateCalls.load(), g_stepCalls.load(),
+            g_lastState.load(), g_lastGate.load());
+    if (n > 0 && g_logFd >= 0) {
+        ssize_t ignored = write(g_logFd, buf, static_cast<size_t>(n));
+        (void) ignored;
     }
+
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+void InstallCrashHandler(std::uintptr_t libBase) {
+    g_libBase = libBase;
+    struct sigaction action{};
+    action.sa_sigaction = CrashHandler;
+    action.sa_flags = SA_SIGINFO;
+    sigemptyset(&action.sa_mask);
+    const int signals[] = {SIGSEGV, SIGABRT, SIGBUS, SIGILL, SIGFPE};
+    for (int sig : signals) {
+        sigaction(sig, &action, nullptr);
+    }
+}
+
+void StartHeartbeat() {
+    std::thread([] {
+        for (;;) {
+            sleep(15);
+            WriteLine("WS heartbeat update=%u step=%u state=%u gate=%u",
+                      g_updateCalls.load(), g_stepCalls.load(),
+                      g_lastState.load(), g_lastGate.load());
+        }
+    }).detach();
 }
 
 inline std::uint32_t Read32(const void *base, std::uintptr_t offset) {
@@ -85,9 +138,12 @@ inline const void *ReadPtr(const void *base, std::uintptr_t offset) {
 
 void UpdateHook(void *self, void *a1, void *a2, void *a3, void *a4, void *a5) {
     const std::uint32_t n = ++g_updateCalls;
-    if (n <= 5 || (n % 300u) == 0) {
-        const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
-        const std::uint32_t gate = a1 ? Read32(a1, kGateStateOffset) : 0xffffffffu;
+    const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
+    const std::uint32_t gate = a1 ? Read32(a1, kGateStateOffset) : 0xffffffffu;
+    const std::uint32_t previousGate = g_lastGate.exchange(gate);
+    g_lastState.store(state);
+
+    if (n <= 5 || gate != previousGate || (n % 300u) == 0) {
         const void *pair0 = a5 ? ReadPtr(a5, kGatePairOffset0) : nullptr;
         const void *pair1 = a5 ? ReadPtr(a5, kGatePairOffset1) : nullptr;
         WriteLine("WS update #%u self=%p state=%u gate14b4=%u pair=%p/%p",
@@ -135,20 +191,17 @@ bool HookOne(const char *name, std::uintptr_t address, std::uint32_t expected,
 namespace WsDiag {
 
 void SetLogTarget(int fd, const char *path) {
-    bool enabled;
+    int target = -1;
+    if (fd >= 0) {
+        target = fd;
+    } else if (path != nullptr) {
+        target = open(path, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    }
     {
         std::lock_guard<std::mutex> lock(g_logMutex);
-        if (fd >= 0) {
-            g_logFd = fd;
-            enabled = true;
-        } else if (path != nullptr) {
-            g_logFile = std::fopen(path, "a");
-            enabled = g_logFile != nullptr;
-        } else {
-            enabled = false;
-        }
+        g_logFd = target;
     }
-    if (enabled) {
+    if (target >= 0) {
         WriteLine("WS diag: log started");
     } else {
         LOGW("WS diag: no log target, logcat only");
@@ -164,6 +217,9 @@ void Install(std::uintptr_t libBase) {
         WriteLine("WS diag: libBootloader base not set, not hooking");
         return;
     }
+
+    InstallCrashHandler(libBase);
+    StartHeartbeat();
 
     HookOne("update", libBase + kUpdateRva, kUpdatePrologue,
             reinterpret_cast<void *>(&UpdateHook),
