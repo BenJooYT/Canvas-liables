@@ -24,8 +24,10 @@ namespace {
 //     0x1a890f0: 6dbc23e9   stp d9, d8, [sp, #-0x40]!
 constexpr std::uintptr_t kUpdateRva = 0x1a88d8c;
 constexpr std::uintptr_t kStepRva = 0x1a890f0;
+constexpr std::uintptr_t kRequestRva = 0xfaef7c;
 constexpr std::uint32_t kUpdatePrologue = 0xa9bb7bfd;
 constexpr std::uint32_t kStepPrologue = 0x6dbc23e9;
+constexpr std::uint32_t kRequestPrologue = 0xa9bc7bfd;
 
 // Gate offsets decoded from the wrapper (0x1a88d8c..0x1a88e2c).
 constexpr std::uintptr_t kStateOffset = 0x98810;    // [self] state, states 0..4
@@ -38,9 +40,11 @@ constexpr std::uintptr_t kGatePairOffset1 = 0x2d8;
 
 using UpdateFn = void (*)(void *, void *, void *, void *, void *, void *);
 using StepFn = void (*)(void *, void *, void *, void *);
+using RequestFn = int (*)(void *, int, void *);
 
 UpdateFn g_updateOrig = nullptr;
 StepFn g_stepOrig = nullptr;
+RequestFn g_requestOrig = nullptr;
 std::atomic<std::uint32_t> g_updateCalls{0};
 std::atomic<std::uint32_t> g_stepCalls{0};
 std::atomic<std::uint32_t> g_lastState{0xffffffffu};
@@ -169,6 +173,17 @@ void StepHook(void *self, void *a1, void *a2, void *a3) {
     }
 }
 
+int RequestHook(void *self, int type, void *payload) {
+    if (self == nullptr) {
+        WriteLine("WS diag: null request builder (type=%d), skipping", type);
+        return 0;
+    }
+    if (g_requestOrig) {
+        return g_requestOrig(self, type, payload);
+    }
+    return 0;
+}
+
 bool HookOne(const char *name, std::uintptr_t address, std::uint32_t expected,
              void *hook, void **original) {
     const std::uint32_t prologue = *reinterpret_cast<const std::uint32_t *>(address);
@@ -227,6 +242,9 @@ void Install(std::uintptr_t libBase) {
     HookOne("step", libBase + kStepRva, kStepPrologue,
             reinterpret_cast<void *>(&StepHook),
             reinterpret_cast<void **>(&g_stepOrig));
+    HookOne("request", libBase + kRequestRva, kRequestPrologue,
+            reinterpret_cast<void *>(&RequestHook),
+            reinterpret_cast<void **>(&g_requestOrig));
 }
 
 } // namespace WsDiag
