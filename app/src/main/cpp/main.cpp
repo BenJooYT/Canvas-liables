@@ -427,6 +427,24 @@ Java_git_artdeell_skymodloader_MainActivity_customServer(JNIEnv *env, jclass cla
 
 extern "C"
 JNIEXPORT void JNICALL
+Java_git_artdeell_skymodloader_MainActivity_nativeSetWsLogTarget(
+        JNIEnv *env,
+        jclass clazz,
+        jint fd,
+        jstring path
+) {
+    const char *pathChars = nullptr;
+    if (path != nullptr) {
+        pathChars = env->GetStringUTFChars(path, nullptr);
+    }
+    WsDiag::SetLogTarget(fd, pathChars);
+    if (pathChars != nullptr) {
+        env->ReleaseStringUTFChars(path, pathChars);
+    }
+}
+
+extern "C"
+JNIEXPORT void JNICALL
 Java_git_artdeell_skymodloader_MainActivity_getSysetemUI(
         JNIEnv *env,
         jclass clazz,

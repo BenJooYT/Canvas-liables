@@ -10,6 +10,14 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.content.ContentValues;
+import android.net.Uri;
+import android.os.Environment;
+import android.os.ParcelFileDescriptor;
+import android.provider.MediaStore;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import android.util.DisplayMetrics;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -249,6 +257,7 @@ public class MainActivity extends Activity {
             }
             MainActivity.customServer(BuildConfig.SKY_SERVER_HOSTNAME);
         }
+        openWsDiagnosticsLog();
         MainActivity.settle(
             info.versionCode,
             gameType == null ? 0 : gameType,
@@ -521,6 +530,42 @@ public class MainActivity extends Activity {
         return deviceInfo;
     }
 
+    private static boolean wsLogOpened = false;
+
+    private void openWsDiagnosticsLog() {
+        if (wsLogOpened) return;
+        wsLogOpened = true;
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                String name = "wsdiag_"
+                    + new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date())
+                    + ".log";
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + "/Canvas");
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri != null) {
+                    ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(uri, "wa");
+                    if (pfd != null) {
+                        nativeSetWsLogTarget(pfd.detachFd(), null);
+                        Log.i("MainActivity", "WS diag log: " + uri);
+                        return;
+                    }
+                }
+            }
+            File external = getExternalFilesDir(null);
+            File logsDir = new File(external != null ? external : getFilesDir(), "logs");
+            if (!logsDir.exists()) logsDir.mkdirs();
+            File logFile = new File(logsDir, "wsdiag.log");
+            nativeSetWsLogTarget(-1, logFile.getAbsolutePath());
+            Log.i("MainActivity", "WS diag log: " + logFile);
+        } catch (Throwable t) {
+            Log.w("MainActivity", "WS diag log setup failed", t);
+        }
+    }
+
     public static native void settle(
         int _gameVersion,
         int _gameType,
@@ -530,6 +575,8 @@ public class MainActivity extends Activity {
         boolean _ceserverEnabled,
         boolean _hideCanvasMenu
     );
+
+    public static native void nativeSetWsLogTarget(int fd, String path);
 
     public static native void setDeviceInfoNative(
         float _xdpi,
