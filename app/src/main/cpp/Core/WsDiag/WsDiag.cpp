@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <ctime>
 #include <fcntl.h>
 #include <mutex>
@@ -182,9 +183,27 @@ void StepHook(void *self, void *a1, void *a2, void *a3, void *a4) {
 }
 
 void UrlHook(void *self, const char *host, void *a3, void *a4) {
-    WriteLine("WS url host=%s", host != nullptr ? host : "(null)");
+    char patched[256];
+    const char *effective = host;
+    if (host != nullptr) {
+        const char *marker = std::strstr(host, ".ws.");
+        if (marker != nullptr) {
+            const std::size_t length = strnlen(host, sizeof(patched) - 1);
+            if (length < sizeof(patched)) {
+                std::memcpy(patched, host, length + 1);
+                char *at = std::strstr(patched, ".ws.");
+                std::memmove(at, at + 3, std::strlen(at + 3) + 1);
+                effective = patched;
+            }
+        }
+    }
+    if (effective != host) {
+        WriteLine("WS url host=%s -> %s", host, effective);
+    } else {
+        WriteLine("WS url host=%s", host != nullptr ? host : "(null)");
+    }
     if (g_urlOrig) {
-        g_urlOrig(self, host, a3, a4);
+        g_urlOrig(self, effective, a3, a4);
     }
 }
 
