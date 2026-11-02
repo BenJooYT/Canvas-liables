@@ -146,6 +146,26 @@ inline const void *ReadPtr(const void *base, std::uintptr_t offset) {
             static_cast<const char *>(base) + offset);
 }
 
+void LogWords(const char *label, const void *base, std::uintptr_t offset) {
+    if (base == nullptr) return;
+    const auto *words = reinterpret_cast<const volatile std::uint32_t *>(
+            static_cast<const char *>(base) + offset);
+    WriteLine("%s=%08x %08x %08x %08x", label, words[0], words[1], words[2], words[3]);
+}
+
+void LogText(const char *label, const void *base, std::uintptr_t offset, std::size_t max) {
+    if (base == nullptr) return;
+    char text[257];
+    if (max > sizeof(text) - 1) max = sizeof(text) - 1;
+    std::memcpy(text, static_cast<const char *>(base) + offset, max);
+    text[max] = 0;
+    for (std::size_t i = 0; i < max && text[i] != 0; ++i) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c < 0x20 || c > 0x7e) text[i] = '.';
+    }
+    WriteLine("%s=%s", label, text);
+}
+
 void UpdateHook(void *self, void *a1, void *a2, void *a3, void *a4, void *a5) {
     const std::uint32_t n = ++g_updateCalls;
     const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
@@ -176,6 +196,10 @@ void StepHook(void *self, void *a1, void *a2, void *a3, void *a4) {
         const void *pair1 = a4 ? ReadPtr(a4, kGatePairOffset1) : nullptr;
         WriteLine("WS step #%u self=%p state=%u client=%p config=%p endpoint=%p arg4=%p pair=%p/%p",
                   n, self, state, client, config, endpoint, a4, pair0, pair1);
+        LogWords("WS uuid-2c0", a4, 0x2c0);
+        LogWords("WS tok-2d0", a4, 0x2d0);
+        LogText("WS txt-2468", a4, 0x2468, 48);
+        LogText("WS txt-2e0", a4, 0x2e0, 48);
     }
     if (g_stepOrig) {
         g_stepOrig(self, a1, a2, a3, a4);
@@ -202,6 +226,8 @@ void UrlHook(void *self, const char *host, void *a3, void *a4) {
     } else {
         WriteLine("WS url host=%s", host != nullptr ? host : "(null)");
     }
+    LogText("WS user", a3, 0, 40);
+    LogText("WS tokenstr", a4, 0, 64);
     if (g_urlOrig) {
         g_urlOrig(self, effective, a3, a4);
     }
