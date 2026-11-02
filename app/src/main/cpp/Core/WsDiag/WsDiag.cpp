@@ -5,8 +5,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "Canvas/Canvas.h"
-#include "include/misc/Logger.h"
+#include "../../include/misc/Logger.h"
 
 namespace {
 
