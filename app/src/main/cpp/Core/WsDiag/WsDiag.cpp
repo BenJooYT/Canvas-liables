@@ -25,9 +25,11 @@ namespace {
 constexpr std::uintptr_t kUpdateRva = 0x1a88d8c;
 constexpr std::uintptr_t kStepRva = 0x1a890f0;
 constexpr std::uintptr_t kRequestRva = 0xfaef7c;
+constexpr std::uintptr_t kUrlRva = 0xf59820;
 constexpr std::uint32_t kUpdatePrologue = 0xa9bb7bfd;
 constexpr std::uint32_t kStepPrologue = 0x6dbc23e9;
 constexpr std::uint32_t kRequestPrologue = 0xa9bc7bfd;
+constexpr std::uint32_t kUrlPrologue = 0xa9bb7bfd;
 
 // Gate offsets decoded from the wrapper (0x1a88d8c..0x1a88e2c).
 constexpr std::uintptr_t kStateOffset = 0x98810;    // [self] state, states 0..4
@@ -41,13 +43,16 @@ constexpr std::uintptr_t kGatePairOffset1 = 0x2d8;
 using UpdateFn = void (*)(void *, void *, void *, void *, void *, void *);
 using StepFn = void (*)(void *, void *, void *, void *);
 using RequestFn = int (*)(void *, int, void *);
+using UrlFn = void (*)(void *, const char *, void *, void *);
 
 UpdateFn g_updateOrig = nullptr;
 StepFn g_stepOrig = nullptr;
 RequestFn g_requestOrig = nullptr;
+UrlFn g_urlOrig = nullptr;
 std::atomic<std::uint32_t> g_updateCalls{0};
 std::atomic<std::uint32_t> g_stepCalls{0};
 std::atomic<std::uint32_t> g_lastState{0xffffffffu};
+std::atomic<std::uint32_t> g_lastStepState{0xffffffffu};
 std::atomic<std::uint32_t> g_lastGate{0xffffffffu};
 std::atomic<bool> g_installed{false};
 std::uintptr_t g_libBase = 0;
@@ -160,8 +165,9 @@ void UpdateHook(void *self, void *a1, void *a2, void *a3, void *a4, void *a5) {
 
 void StepHook(void *self, void *a1, void *a2, void *a3) {
     const std::uint32_t n = ++g_stepCalls;
-    if (n <= 5 || (n % 300u) == 0) {
-        const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
+    const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
+    const std::uint32_t previousState = g_lastStepState.exchange(state);
+    if (n <= 5 || state != previousState || (n % 300u) == 0) {
         const void *client = self ? ReadPtr(self, kContextOffset) : nullptr;
         const void *config = client ? ReadPtr(client, kClientConfigOffset) : nullptr;
         const void *endpoint = config ? ReadPtr(config, kEndpointOffset) : nullptr;
@@ -170,6 +176,13 @@ void StepHook(void *self, void *a1, void *a2, void *a3) {
     }
     if (g_stepOrig) {
         g_stepOrig(self, a1, a2, a3);
+    }
+}
+
+void UrlHook(void *self, const char *host, void *a3, void *a4) {
+    WriteLine("WS url host=%s", host != nullptr ? host : "(null)");
+    if (g_urlOrig) {
+        g_urlOrig(self, host, a3, a4);
     }
 }
 
@@ -245,6 +258,9 @@ void Install(std::uintptr_t libBase) {
     HookOne("request", libBase + kRequestRva, kRequestPrologue,
             reinterpret_cast<void *>(&RequestHook),
             reinterpret_cast<void **>(&g_requestOrig));
+    HookOne("url", libBase + kUrlRva, kUrlPrologue,
+            reinterpret_cast<void *>(&UrlHook),
+            reinterpret_cast<void **>(&g_urlOrig));
 }
 
 } // namespace WsDiag
