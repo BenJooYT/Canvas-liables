@@ -25,6 +25,7 @@
 #include <android/asset_manager_jni.h>
 #include "shadowhook.h"
 #include "ChatFlagFix/ChatFlagFixInstall.h"
+#include "WsDiag/WsDiag.h"
 #include "Core/OtherAudio/OtherAudioLocate.h"
 
 extern "C" {
@@ -275,6 +276,7 @@ Java_git_artdeell_skymodloader_MainActivity_settle(
 
     Canvas::libElfScanner = ElfScanner::createWithPath(Canvas::libName);
     Canvas::libBase = Canvas::libElfScanner.baseSegment().startAddress;
+    WsDiag::Install(Canvas::libBase);
 
     if (Canvas::CeserverEnabled) {
         LOGI("Starting Cheat Engine Server");
