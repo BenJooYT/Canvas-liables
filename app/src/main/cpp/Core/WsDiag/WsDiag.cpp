@@ -41,7 +41,7 @@ constexpr std::uintptr_t kGatePairOffset0 = 0x2d0;  // pair must be non-zero
 constexpr std::uintptr_t kGatePairOffset1 = 0x2d8;
 
 using UpdateFn = void (*)(void *, void *, void *, void *, void *, void *);
-using StepFn = void (*)(void *, void *, void *, void *);
+using StepFn = void (*)(void *, void *, void *, void *, void *);
 using RequestFn = int (*)(void *, int, void *);
 using UrlFn = void (*)(void *, const char *, void *, void *);
 
@@ -163,7 +163,7 @@ void UpdateHook(void *self, void *a1, void *a2, void *a3, void *a4, void *a5) {
     }
 }
 
-void StepHook(void *self, void *a1, void *a2, void *a3) {
+void StepHook(void *self, void *a1, void *a2, void *a3, void *a4) {
     const std::uint32_t n = ++g_stepCalls;
     const std::uint32_t state = self ? Read32(self, kStateOffset) : 0xffffffffu;
     const std::uint32_t previousState = g_lastStepState.exchange(state);
@@ -171,11 +171,13 @@ void StepHook(void *self, void *a1, void *a2, void *a3) {
         const void *client = self ? ReadPtr(self, kContextOffset) : nullptr;
         const void *config = client ? ReadPtr(client, kClientConfigOffset) : nullptr;
         const void *endpoint = config ? ReadPtr(config, kEndpointOffset) : nullptr;
-        WriteLine("WS step #%u self=%p state=%u client=%p config=%p endpoint=%p",
-                  n, self, state, client, config, endpoint);
+        const void *pair0 = a4 ? ReadPtr(a4, kGatePairOffset0) : nullptr;
+        const void *pair1 = a4 ? ReadPtr(a4, kGatePairOffset1) : nullptr;
+        WriteLine("WS step #%u self=%p state=%u client=%p config=%p endpoint=%p arg4=%p pair=%p/%p",
+                  n, self, state, client, config, endpoint, a4, pair0, pair1);
     }
     if (g_stepOrig) {
-        g_stepOrig(self, a1, a2, a3);
+        g_stepOrig(self, a1, a2, a3, a4);
     }
 }
 
